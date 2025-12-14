@@ -3,15 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CineStream XC - Web Player</title>
-    
-    <!-- 1. Tailwind CSS (Visual) -->
+    <title>CineStream XC - Multi-Gateway</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    
-    <!-- 2. HLS.js (Motor de Vídeo) -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-
-    <!-- Configuração de Estilo Extra -->
     <style>
         body { background-color: #141414; color: white; overflow-x: hidden; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
@@ -23,7 +17,6 @@
 <body>
     <div id="root"></div>
 
-    <!-- 3. Importmap para React funcionar direto no navegador sem build -->
     <script type="importmap">
     {
       "imports": {
@@ -34,24 +27,24 @@
     }
     </script>
 
-    <!-- 4. O Nosso Aplicativo (Babel standalone para processar JSX) -->
     <script type="module">
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Play, Info, Volume2, VolumeX, Maximize, Minimize, ChevronLeft, ChevronRight, X, Tv, Film, LogOut, Loader2, Search, AlertTriangle, ShieldCheck, Wifi, Zap } from 'lucide-react';
+        import { Play, Info, Volume2, VolumeX, Maximize, Minimize, ChevronLeft, ChevronRight, X, Tv, Film, LogOut, Loader2, Search, AlertTriangle, ShieldCheck, Wifi, Zap, RefreshCw } from 'lucide-react';
 
-        // --- CONFIGURAÇÃO DE TUNELAMENTO (PROXY) ---
-        // Essencial para rodar IPTV HTTP em sites HTTPS (Vercel/Netlify)
-        const PROXIES = [
-            { name: 'CorsProxy', url: 'https://corsproxy.io/?' },
-            { name: 'AllOrigins', url: 'https://api.allorigins.win/raw?url=' }
+        // --- SISTEMA MULTI-GATEWAY ---
+        // Se um falhar, o sistema tenta o próximo automaticamente
+        const GATEWAYS = [
+            { name: 'Rota A (AllOrigins)', url: 'https://api.allorigins.win/raw?url=' },
+            { name: 'Rota B (CodeTabs)', url: 'https://api.codetabs.com/v1/proxy?quest=' },
+            { name: 'Rota C (CorsProxy)', url: 'https://corsproxy.io/?' },
+            { name: 'Rota D (ThingProxy)', url: 'https://thingproxy.freeboard.io/fetch/' }
         ];
 
-        // DADOS PADRÃO (LIMPOS PARA SEGURANÇA)
         const DEFAULT_CREDENTIALS = {
-            host: "http://sempretv.sbs", // Mantido o host para conveniência
-            username: "", // Removido
-            password: ""  // Removido
+            host: "http://sempretv.sbs",
+            username: "",
+            password: ""
         };
 
         const formatUrl = (url) => {
@@ -61,17 +54,17 @@
             return formatted;
         };
 
-        // --- COMPONENTES ---
+        /* --- COMPONENTES --- */
 
-        const VideoPlayer = ({ streamUrl, onClose, title }) => {
+        const VideoPlayer = ({ streamUrl, onClose, title, activeGateway }) => {
             const videoRef = useRef(null);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
             const [isPlaying, setIsPlaying] = useState(true);
 
-            // Tunelamento forçado para o vídeo
-            const activeProxy = PROXIES[0].url;
-            const proxiedStreamUrl = `${activeProxy}${encodeURIComponent(streamUrl)}`;
+            // Usa o gateway que funcionou no login
+            const proxyPrefix = activeGateway || GATEWAYS[0].url;
+            const proxiedStreamUrl = `${proxyPrefix}${encodeURIComponent(streamUrl)}`;
 
             useEffect(() => {
                 const video = videoRef.current;
@@ -82,9 +75,8 @@
                         enableWorker: true,
                         lowLatencyMode: true,
                         xhrSetup: function (xhr, url) {
-                            // Intercepta fragmentos .ts inseguros e passa pelo proxy
-                            if (!url.startsWith('https') && !url.includes('corsproxy')) {
-                                xhr.open('GET', `${activeProxy}${encodeURIComponent(url)}`, true);
+                            if (!url.startsWith('https') && !url.includes('api.allorigins') && !url.includes('corsproxy')) {
+                                xhr.open('GET', `${proxyPrefix}${encodeURIComponent(url)}`, true);
                             }
                         }
                     });
@@ -100,9 +92,10 @@
                     hls.on(window.Hls.Events.ERROR, (e, data) => {
                         if (data.fatal) {
                            if(data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
+                               console.log("Tentando recuperar buffer...");
                                hls.startLoad();
                            } else {
-                               setError("Erro de transmissão. O servidor pode estar instável.");
+                               setError("Erro de transmissão (Proxy instável).");
                                setLoading(false);
                            }
                         }
@@ -116,8 +109,9 @@
 
             return React.createElement('div', { className: "fixed inset-0 z-[100] bg-black flex items-center justify-center animate-in" },
                 React.createElement('div', { className: "relative w-full h-full bg-black group" },
-                    loading && React.createElement('div', { className: "absolute inset-0 flex items-center justify-center text-white z-20" }, 
-                        React.createElement(Loader2, { className: "animate-spin text-red-600 w-12 h-12" })
+                    loading && React.createElement('div', { className: "absolute inset-0 flex items-center justify-center text-white z-20 flex-col gap-2" }, 
+                        React.createElement(Loader2, { className: "animate-spin text-red-600 w-12 h-12" }),
+                        React.createElement('span', { className: "text-xs text-gray-400"}, "Tunelando vídeo...")
                     ),
                     error && React.createElement('div', { className: "absolute inset-0 flex flex-col items-center justify-center text-white z-30 bg-black/90 p-4 text-center" },
                         React.createElement(AlertTriangle, { className: "mb-2 text-red-500" }),
@@ -137,34 +131,21 @@
             );
         };
 
+        // Componentes Row e Hero (Simplificados para o exemplo, mantendo a lógica visual)
         const Row = ({ title, items, onPlay }) => {
             const rowRef = useRef(null);
             const scroll = (off) => { if(rowRef.current) rowRef.current.scrollLeft += off; };
             if (!items?.length) return null;
-
             return React.createElement('div', { className: "mb-8 px-4 md:px-12 relative group/row" },
                 React.createElement('h2', { className: "text-white font-bold text-lg md:text-xl mb-3 flex items-center gap-2" }, title),
                 React.createElement('div', { className: "relative group" },
                     React.createElement('button', { onClick: () => scroll(-300), className: "absolute left-0 top-0 bottom-0 z-40 bg-black/60 w-10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity h-full rounded-r" }, React.createElement(ChevronLeft, { className: "text-white" })),
                     React.createElement('div', { ref: rowRef, className: "flex gap-3 overflow-x-auto scrollbar-hide scroll-smooth pb-4 pt-2" },
                         items.map((item, idx) => 
-                            React.createElement('div', { 
-                                key: idx, 
-                                className: "relative flex-none w-[130px] md:w-[180px] aspect-[2/3] bg-gray-800 rounded overflow-hidden cursor-pointer hover:scale-105 hover:z-50 transition-transform duration-200 group/card shadow-lg",
-                                onClick: () => onPlay(item)
-                            },
-                                React.createElement('img', { 
-                                    src: item.stream_icon, 
-                                    className: "w-full h-full object-cover", 
-                                    loading: "lazy", 
-                                    onError: (e) => e.target.src = "https://via.placeholder.com/300x450/222/555?text=CineStream" 
-                                }),
-                                React.createElement('div', { className: "absolute inset-0 bg-black/40 opacity-0 group-hover/card:opacity-100 transition-opacity flex items-center justify-center" },
-                                    React.createElement(Play, { className: "text-white fill-white w-10 h-10 drop-shadow-lg" })
-                                ),
-                                React.createElement('div', { className: "absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black to-transparent" },
-                                    React.createElement('p', { className: "text-white text-xs font-bold truncate" }, item.name)
-                                )
+                            React.createElement('div', { key: idx, className: "relative flex-none w-[130px] md:w-[180px] aspect-[2/3] bg-gray-800 rounded overflow-hidden cursor-pointer hover:scale-105 hover:z-50 transition-transform duration-200 group/card shadow-lg", onClick: () => onPlay(item) },
+                                React.createElement('img', { src: item.stream_icon, className: "w-full h-full object-cover", loading: "lazy", onError: (e) => e.target.src = "https://via.placeholder.com/300x450/222/555?text=CineStream" }),
+                                React.createElement('div', { className: "absolute inset-0 bg-black/40 opacity-0 group-hover/card:opacity-100 transition-opacity flex items-center justify-center" }, React.createElement(Play, { className: "text-white fill-white w-10 h-10 drop-shadow-lg" })),
+                                React.createElement('div', { className: "absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black to-transparent" }, React.createElement('p', { className: "text-white text-xs font-bold truncate" }, item.name))
                             )
                         )
                     ),
@@ -185,18 +166,14 @@
                 React.createElement('div', { className: "absolute bottom-16 left-4 md:left-12 max-w-2xl z-10" },
                     React.createElement('h1', { className: "text-4xl md:text-6xl font-black text-white drop-shadow-2xl mb-4" }, item.name),
                     React.createElement('div', { className: "flex gap-4" },
-                        React.createElement('button', { onClick: () => onPlay(item), className: "bg-white text-black px-8 py-3 rounded font-bold hover:bg-gray-200 transition flex items-center gap-2" }, 
-                            React.createElement(Play, { fill: "black" }), "Assistir"
-                        ),
-                        React.createElement('button', { className: "bg-gray-500/40 text-white px-8 py-3 rounded font-bold hover:bg-gray-500/60 backdrop-blur-md transition flex items-center gap-2" }, 
-                            React.createElement(Info, null), "Info"
-                        )
+                        React.createElement('button', { onClick: () => onPlay(item), className: "bg-white text-black px-8 py-3 rounded font-bold hover:bg-gray-200 transition flex items-center gap-2" }, React.createElement(Play, { fill: "black" }), "Assistir"),
+                        React.createElement('button', { className: "bg-gray-500/40 text-white px-8 py-3 rounded font-bold hover:bg-gray-500/60 backdrop-blur-md transition flex items-center gap-2" }, React.createElement(Info, null), "Info")
                     )
                 )
             );
         };
 
-        const Login = ({ onLogin, loading, error }) => {
+        const Login = ({ onLogin, loading, error, log }) => {
             const [host, setHost] = useState(DEFAULT_CREDENTIALS.host);
             const [user, setUser] = useState(DEFAULT_CREDENTIALS.username);
             const [pass, setPass] = useState(DEFAULT_CREDENTIALS.password);
@@ -205,9 +182,9 @@
                 React.createElement('div', { className: "bg-black/85 p-10 rounded-lg max-w-md w-full backdrop-blur-md border border-gray-800" },
                     React.createElement('h1', { className: "text-red-600 text-5xl font-black mb-8 text-center tracking-tighter" }, "NET", React.createElement('span', { className: "text-white font-light" }, "XSTREAM")),
                     
-                    error && React.createElement('div', { className: "bg-red-900/40 border border-red-500 p-3 rounded mb-4 text-red-200 text-sm flex items-center gap-2" },
-                        React.createElement(AlertTriangle, { size: 16 }), error
-                    ),
+                    error && React.createElement('div', { className: "bg-red-900/40 border border-red-500 p-3 rounded mb-4 text-red-200 text-sm flex items-center gap-2" }, React.createElement(AlertTriangle, { size: 16 }), error),
+                    
+                    loading && React.createElement('div', { className: "bg-blue-900/40 border border-blue-500 p-3 rounded mb-4 text-blue-200 text-xs font-mono animate-pulse" }, log || "Iniciando protocolos..."),
 
                     React.createElement('form', { onSubmit: (e) => { e.preventDefault(); onLogin(host, user, pass); }, className: "flex flex-col gap-4" },
                         React.createElement('div', { className: "relative" },
@@ -217,14 +194,11 @@
                         React.createElement('input', { className: "bg-[#333] text-white p-4 rounded border-b-2 border-transparent focus:border-red-600 outline-none", placeholder: "Usuário", value: user, onChange: e => setUser(e.target.value) }),
                         React.createElement('input', { className: "bg-[#333] text-white p-4 rounded border-b-2 border-transparent focus:border-red-600 outline-none", type: "password", placeholder: "Senha", value: pass, onChange: e => setPass(e.target.value) }),
                         
-                        React.createElement('button', { disabled: loading, className: "bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded mt-2 transition flex items-center justify-center gap-2 shadow-lg" },
-                            loading ? React.createElement(Loader2, { className: "animate-spin" }) : "Entrar com Proxy Seguro"
+                        React.createElement('button', { disabled: loading, className: "bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded mt-2 transition flex items-center justify-center gap-2 shadow-lg disabled:opacity-50" },
+                            loading ? React.createElement(Loader2, { className: "animate-spin" }) : "Buscar Rotas Seguras"
                         )
                     ),
-                    React.createElement('div', { className: "mt-6 flex items-center justify-center gap-2 text-green-500 text-xs font-mono bg-green-900/20 p-2 rounded border border-green-800" },
-                        React.createElement(ShieldCheck, { size: 12 }),
-                        React.createElement('span', null, "Conexão Tunelada Ativa (HTTPS Fix)")
-                    )
+                    React.createElement('div', { className: "mt-6 text-center text-gray-500 text-xs" }, "V8 Multi-Gateway System")
                 )
             );
         };
@@ -233,65 +207,73 @@
             const [user, setUser] = useState(null);
             const [loading, setLoading] = useState(false);
             const [error, setError] = useState(null);
+            const [loginLog, setLoginLog] = useState("");
             const [data, setData] = useState({ vod: {}, live: {}, featured: null });
             const [player, setPlayer] = useState(null);
             const [activeTab, setActiveTab] = useState('home');
+            const [activeGateway, setActiveGateway] = useState(null);
 
-            const proxyFetch = async (url) => {
-                const target = `${PROXIES[0].url}${encodeURIComponent(url)}`;
+            // Fetch inteligente que tenta o gateway específico
+            const tryFetch = async (url, gatewayUrl) => {
+                const target = `${gatewayUrl}${encodeURIComponent(url)}`;
                 const res = await fetch(target);
-                if(!res.ok) throw new Error("Erro Proxy");
+                if(!res.ok) throw new Error("Erro");
                 return await res.json();
             }
 
             const handleLogin = async (host, username, password) => {
-                setLoading(true); setError(null);
+                setLoading(true); setError(null); setLoginLog("Iniciando varredura...");
                 const baseUrl = formatUrl(host);
+                const query = `/player_api.php?username=${username}&password=${password}`;
                 
-                try {
-                    const url = `${baseUrl}/player_api.php?username=${username}&password=${password}`;
-                    const json = await proxyFetch(url);
-                    
-                    if (json.user_info && json.user_info.auth === 1) {
-                        const userData = { host: baseUrl, username, password, authData: json };
-                        setUser(userData);
-                        localStorage.setItem('cineStreamUserV7', JSON.stringify(userData));
-                        loadContent(userData);
-                    } else {
-                        setError("Credenciais inválidas.");
-                        setLoading(false);
+                let successGateway = null;
+                let authData = null;
+
+                // Tenta cada gateway sequencialmente
+                for (const gateway of GATEWAYS) {
+                    try {
+                        setLoginLog(`Testando ${gateway.name}...`);
+                        const json = await tryFetch(baseUrl + query, gateway.url);
+                        
+                        if (json.user_info && json.user_info.auth === 1) {
+                            successGateway = gateway.url;
+                            authData = json;
+                            break; // Sucesso! Para o loop.
+                        }
+                    } catch (e) {
+                        console.log(`Falha em ${gateway.name}`);
                     }
-                } catch (e) {
-                    console.error(e);
-                    setError("Erro ao conectar no servidor (Proxy Falhou). Tente mais tarde.");
+                }
+
+                if (successGateway && authData) {
+                    setLoginLog("Conexão estabelecida! Carregando...");
+                    const userData = { host: baseUrl, username, password, authData };
+                    setActiveGateway(successGateway);
+                    setUser(userData);
+                    loadContent(userData, successGateway);
+                } else {
+                    setError("Falha Total: Nenhum Gateway conseguiu conectar ao servidor. Verifique o usuário/senha ou o servidor está offline.");
                     setLoading(false);
                 }
             };
 
-            useEffect(() => {
-                const saved = localStorage.getItem('cineStreamUserV7');
-                if(saved) {
-                    const parsed = JSON.parse(saved);
-                    setUser(parsed);
-                    loadContent(parsed);
-                }
-            }, []);
-
-            const loadContent = async (userData) => {
+            const loadContent = async (userData, gatewayUrl) => {
                 try {
                     const base = `${userData.host}/player_api.php?username=${userData.username}&password=${userData.password}`;
                     
+                    // Usa o mesmo gateway que funcionou no login
+                    const pFetch = (act) => tryFetch(base + "&action=" + act, gatewayUrl);
+
                     const [vc, lc, vs, ls] = await Promise.all([
-                        proxyFetch(base + "&action=get_vod_categories"),
-                        proxyFetch(base + "&action=get_live_categories"),
-                        proxyFetch(base + "&action=get_vod_streams"),
-                        proxyFetch(base + "&action=get_live_streams")
+                        pFetch("get_vod_categories"),
+                        pFetch("get_live_categories"),
+                        pFetch("get_vod_streams"),
+                        pFetch("get_live_streams")
                     ]);
                     
                     processContent(vc, lc, vs, ls);
                 } catch (e) {
-                    console.log(e);
-                    // setError("Falha ao baixar listas via Proxy.");
+                    console.error(e);
                 } finally {
                     setLoading(false);
                 }
@@ -326,7 +308,7 @@
                 setPlayer({ url, title: item.name });
             };
 
-            if (!user) return React.createElement(Login, { onLogin: handleLogin, loading: loading, error: error });
+            if (!user) return React.createElement(Login, { onLogin: handleLogin, loading: loading, error: error, log: loginLog });
 
             return React.createElement('div', { className: "bg-[#141414] min-h-screen font-sans text-white pb-10" },
                 React.createElement('div', { className: "fixed top-0 w-full z-50 bg-black/80 backdrop-blur-md px-6 py-4 flex justify-between items-center border-b border-gray-800" },
@@ -338,7 +320,7 @@
                             React.createElement('button', { onClick: () => setActiveTab('live'), className: activeTab === 'live' ? "text-white" : "" }, "TV")
                         )
                     ),
-                    React.createElement('button', { onClick: () => { setUser(null); localStorage.removeItem('cineStreamUserV7'); }, className: "text-gray-400 hover:text-white" }, React.createElement(LogOut, { size: 20 }))
+                    React.createElement('button', { onClick: () => { setUser(null); }, className: "text-gray-400 hover:text-white" }, React.createElement(LogOut, { size: 20 }))
                 ),
 
                 React.createElement('div', { className: "pt-20" },
@@ -359,7 +341,7 @@
                     )
                 ),
 
-                player && React.createElement(VideoPlayer, { streamUrl: player.url, title: player.title, onClose: () => setPlayer(null) })
+                player && React.createElement(VideoPlayer, { streamUrl: player.url, title: player.title, activeGateway: activeGateway, onClose: () => setPlayer(null) })
             );
         };
 
