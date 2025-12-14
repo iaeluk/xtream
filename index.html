@@ -2,16 +2,16 @@
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CineStream XC - Multi-Gateway</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CineStream XC - Native Bridge</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <style>
-        body { background-color: #141414; color: white; overflow-x: hidden; }
+        body { background-color: #000; color: white; overflow-x: hidden; touch-action: pan-y; }
         .scrollbar-hide::-webkit-scrollbar { display: none; }
-        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
-        .animate-in { animation: fadeIn 0.5s ease-out; }
-        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .glass { background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(10px); }
+        .animate-pulse-fast { animation: pulse 1s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
     </style>
 </head>
 <body>
@@ -30,15 +30,16 @@
     <script type="module">
         import React, { useState, useEffect, useRef } from 'react';
         import { createRoot } from 'react-dom/client';
-        import { Play, Info, Volume2, VolumeX, Maximize, Minimize, ChevronLeft, ChevronRight, X, Tv, Film, LogOut, Loader2, Search, AlertTriangle, ShieldCheck, Wifi, Zap, RefreshCw } from 'lucide-react';
+        import { Play, Info, Volume2, VolumeX, Maximize, Minimize, ChevronLeft, ChevronRight, X, Tv, Film, LogOut, Loader2, Search, AlertTriangle, ShieldCheck, Wifi, Zap, ExternalLink, Smartphone } from 'lucide-react';
 
-        // --- SISTEMA MULTI-GATEWAY ---
-        // Se um falhar, o sistema tenta o próximo automaticamente
-        const GATEWAYS = [
-            { name: 'Rota A (AllOrigins)', url: 'https://api.allorigins.win/raw?url=' },
-            { name: 'Rota B (CodeTabs)', url: 'https://api.codetabs.com/v1/proxy?quest=' },
-            { name: 'Rota C (CorsProxy)', url: 'https://corsproxy.io/?' },
-            { name: 'Rota D (ThingProxy)', url: 'https://thingproxy.freeboard.io/fetch/' }
+        // --- SISTEMA DE ROTAÇÃO DE GATEWAY (PARA LOGIN/DADOS) ---
+        // Usamos isso APENAS para baixar os textos e capas (JSON).
+        // Para o vídeo, usaremos o método NATIVO.
+        const API_GATEWAYS = [
+            'https://api.codetabs.com/v1/proxy?quest=',
+            'https://corsproxy.io/?',
+            'https://api.allorigins.win/raw?url=',
+            'https://thingproxy.freeboard.io/fetch/'
         ];
 
         const DEFAULT_CREDENTIALS = {
@@ -56,100 +57,120 @@
 
         /* --- COMPONENTES --- */
 
-        const VideoPlayer = ({ streamUrl, onClose, title, activeGateway }) => {
+        const VideoPlayer = ({ streamUrl, onClose, title, userHost }) => {
             const videoRef = useRef(null);
             const [loading, setLoading] = useState(true);
             const [error, setError] = useState(null);
-            const [isPlaying, setIsPlaying] = useState(true);
+            
+            // Tenta reproduzir no navegador via proxy (Tentativa 1)
+            const webPlayUrl = `${API_GATEWAYS[1]}${encodeURIComponent(streamUrl)}`;
 
-            // Usa o gateway que funcionou no login
-            const proxyPrefix = activeGateway || GATEWAYS[0].url;
-            const proxiedStreamUrl = `${proxyPrefix}${encodeURIComponent(streamUrl)}`;
+            // --- A MÁGICA DO ANDROID (DEEP LINKING) ---
+            // Isso cria links que chamam apps instalados no celular
+            const openNative = (playerPackage) => {
+                // Remove o http:// para evitar duplicação em alguns intents
+                const cleanUrl = streamUrl; 
+                
+                // Estrutura Intent do Android
+                // scheme=http garante que o Android saiba que é streaming
+                const intentUrl = `intent:${cleanUrl}#Intent;type=video/*;scheme=http;package=${playerPackage};end`;
+                
+                // Tenta abrir
+                window.location.href = intentUrl;
+            };
+
+            const openVLC = () => openNative('org.videolan.vlc');
+            const openMX = () => openNative('com.mxtech.videoplayer.ad');
+            const openGeneric = () => {
+                 window.location.href = streamUrl; // Tenta download/abrir direto
+            };
 
             useEffect(() => {
                 const video = videoRef.current;
                 if (!video) return;
 
                 if (window.Hls && window.Hls.isSupported()) {
-                    const hls = new window.Hls({
-                        enableWorker: true,
-                        lowLatencyMode: true,
-                        xhrSetup: function (xhr, url) {
-                            if (!url.startsWith('https') && !url.includes('api.allorigins') && !url.includes('corsproxy')) {
-                                xhr.open('GET', `${proxyPrefix}${encodeURIComponent(url)}`, true);
-                            }
-                        }
-                    });
-                    
-                    hls.loadSource(proxiedStreamUrl);
+                    const hls = new window.Hls({ enableWorker: true, lowLatencyMode: true });
+                    hls.loadSource(webPlayUrl);
                     hls.attachMedia(video);
-                    
-                    hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
-                        setLoading(false);
-                        video.play().catch(() => setIsPlaying(false));
-                    });
-                    
+                    hls.on(window.Hls.Events.MANIFEST_PARSED, () => setLoading(false));
                     hls.on(window.Hls.Events.ERROR, (e, data) => {
-                        if (data.fatal) {
-                           if(data.type === window.Hls.ErrorTypes.NETWORK_ERROR) {
-                               console.log("Tentando recuperar buffer...");
-                               hls.startLoad();
-                           } else {
-                               setError("Erro de transmissão (Proxy instável).");
-                               setLoading(false);
-                           }
+                        if(data.fatal) {
+                             // Se falhar no navegador, paramos o loading e mostramos as opções nativas
+                             setLoading(false);
+                             setError("Browser bloqueou o vídeo. Use os botões abaixo para abrir no Android.");
                         }
                     });
                     return () => hls.destroy();
                 } else {
-                    video.src = proxiedStreamUrl;
+                    video.src = webPlayUrl;
                     video.oncanplay = () => setLoading(false);
+                    video.onerror = () => {
+                        setLoading(false);
+                        setError("Browser bloqueou o vídeo. Use os botões abaixo.");
+                    }
                 }
-            }, [proxiedStreamUrl]);
+            }, [webPlayUrl]);
 
-            return React.createElement('div', { className: "fixed inset-0 z-[100] bg-black flex items-center justify-center animate-in" },
-                React.createElement('div', { className: "relative w-full h-full bg-black group" },
-                    loading && React.createElement('div', { className: "absolute inset-0 flex items-center justify-center text-white z-20 flex-col gap-2" }, 
-                        React.createElement(Loader2, { className: "animate-spin text-red-600 w-12 h-12" }),
-                        React.createElement('span', { className: "text-xs text-gray-400"}, "Tunelando vídeo...")
-                    ),
-                    error && React.createElement('div', { className: "absolute inset-0 flex flex-col items-center justify-center text-white z-30 bg-black/90 p-4 text-center" },
-                        React.createElement(AlertTriangle, { className: "mb-2 text-red-500" }),
-                        React.createElement('p', null, error),
-                        React.createElement('button', { onClick: onClose, className: "mt-4 bg-white text-black px-4 py-2 rounded font-bold" }, "Fechar")
-                    ),
-                    React.createElement('video', { 
-                        ref: videoRef, 
-                        className: "w-full h-full object-contain",
-                        onClick: () => { const v = videoRef.current; v.paused ? v.play() : v.pause(); setIsPlaying(!v.paused); }
-                    }),
-                    React.createElement('div', { className: "absolute top-0 left-0 w-full p-4 flex justify-between items-center bg-gradient-to-b from-black/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" },
-                        React.createElement('h2', { className: "text-white font-bold text-lg drop-shadow-md truncate max-w-[80%]" }, title),
+            return React.createElement('div', { className: "fixed inset-0 z-[100] bg-black/95 flex items-center justify-center animate-in backdrop-blur-sm" },
+                React.createElement('div', { className: "relative w-full h-full max-w-4xl max-h-[90vh] flex flex-col items-center justify-center p-4" },
+                    
+                    // HEADER PLAYER
+                    React.createElement('div', { className: "absolute top-4 left-0 w-full flex justify-between items-center px-4 z-50" },
+                        React.createElement('h2', { className: "text-white font-bold text-lg drop-shadow-md truncate w-3/4" }, title),
                         React.createElement('button', { onClick: onClose, className: "bg-white/10 p-2 rounded-full text-white hover:bg-red-600 transition" }, React.createElement(X, { size: 24 }))
+                    ),
+
+                    // ÁREA DE VÍDEO / ERRO
+                    !error ? React.createElement('div', { className: "w-full aspect-video bg-black relative rounded-lg overflow-hidden shadow-2xl border border-gray-800" },
+                        loading && React.createElement('div', { className: "absolute inset-0 flex flex-col items-center justify-center text-white z-20" }, 
+                            React.createElement(Loader2, { className: "animate-spin text-red-600 w-12 h-12 mb-2" }),
+                            React.createElement('span', { className: "text-xs font-mono"}, "Tentando Web Player...")
+                        ),
+                        React.createElement('video', { ref: videoRef, className: "w-full h-full", controls: true })
+                    ) : React.createElement('div', { className: "w-full aspect-video bg-gray-900 flex flex-col items-center justify-center text-center p-6 rounded-lg border border-red-900/50" },
+                         React.createElement(Smartphone, { size: 48, className: "text-red-500 mb-4" }),
+                         React.createElement('p', { className: "text-xl font-bold text-white mb-2" }, "Modo Nativo Necessário"),
+                         React.createElement('p', { className: "text-sm text-gray-400 mb-4" }, "O Chrome bloqueou este vídeo (HTTP). Abra direto no app do celular:")
+                    ),
+
+                    // BOTÕES DE AÇÃO "BRABOS" (NATIVE BRIDGE)
+                    React.createElement('div', { className: "mt-6 grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-md" },
+                        React.createElement('button', { onClick: openVLC, className: "flex items-center justify-center gap-3 bg-orange-600 hover:bg-orange-700 text-white py-4 px-6 rounded-lg font-bold shadow-lg transition transform active:scale-95" },
+                            React.createElement(ExternalLink, { size: 20 }), "Abrir no VLC Player"
+                        ),
+                        React.createElement('button', { onClick: openMX, className: "flex items-center justify-center gap-3 bg-blue-600 hover:bg-blue-700 text-white py-4 px-6 rounded-lg font-bold shadow-lg transition transform active:scale-95" },
+                            React.createElement(Play, { size: 20, fill: "white" }), "Abrir no MX Player"
+                        ),
+                         React.createElement('button', { onClick: openGeneric, className: "md:col-span-2 text-gray-500 text-xs hover:text-white underline mt-2" },
+                            "Tentar abrir no player padrão do sistema"
+                        )
+                    ),
+                    
+                    React.createElement('div', { className: "mt-4 text-[10px] text-gray-500 text-center max-w-xs" }, 
+                        "Dica: Instale o VLC for Android na Play Store para a melhor experiência sem travamentos."
                     )
                 )
             );
         };
 
-        // Componentes Row e Hero (Simplificados para o exemplo, mantendo a lógica visual)
+        // ... (Row, Hero, Login - Mantidos com melhorias de robustez)
+        
         const Row = ({ title, items, onPlay }) => {
             const rowRef = useRef(null);
             const scroll = (off) => { if(rowRef.current) rowRef.current.scrollLeft += off; };
             if (!items?.length) return null;
-            return React.createElement('div', { className: "mb-8 px-4 md:px-12 relative group/row" },
-                React.createElement('h2', { className: "text-white font-bold text-lg md:text-xl mb-3 flex items-center gap-2" }, title),
-                React.createElement('div', { className: "relative group" },
-                    React.createElement('button', { onClick: () => scroll(-300), className: "absolute left-0 top-0 bottom-0 z-40 bg-black/60 w-10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity h-full rounded-r" }, React.createElement(ChevronLeft, { className: "text-white" })),
-                    React.createElement('div', { ref: rowRef, className: "flex gap-3 overflow-x-auto scrollbar-hide scroll-smooth pb-4 pt-2" },
+            return React.createElement('div', { className: "mb-6 pl-4 md:pl-12" },
+                React.createElement('h2', { className: "text-white font-bold text-base md:text-xl mb-3 flex items-center gap-2" }, title),
+                React.createElement('div', { className: "relative" },
+                    React.createElement('div', { ref: rowRef, className: "flex gap-3 overflow-x-auto scrollbar-hide scroll-smooth pb-4 pr-4" },
                         items.map((item, idx) => 
-                            React.createElement('div', { key: idx, className: "relative flex-none w-[130px] md:w-[180px] aspect-[2/3] bg-gray-800 rounded overflow-hidden cursor-pointer hover:scale-105 hover:z-50 transition-transform duration-200 group/card shadow-lg", onClick: () => onPlay(item) },
-                                React.createElement('img', { src: item.stream_icon, className: "w-full h-full object-cover", loading: "lazy", onError: (e) => e.target.src = "https://via.placeholder.com/300x450/222/555?text=CineStream" }),
-                                React.createElement('div', { className: "absolute inset-0 bg-black/40 opacity-0 group-hover/card:opacity-100 transition-opacity flex items-center justify-center" }, React.createElement(Play, { className: "text-white fill-white w-10 h-10 drop-shadow-lg" })),
-                                React.createElement('div', { className: "absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black to-transparent" }, React.createElement('p', { className: "text-white text-xs font-bold truncate" }, item.name))
+                            React.createElement('div', { key: idx, className: "relative flex-none w-[120px] md:w-[160px] aspect-[2/3] bg-gray-900 rounded overflow-hidden cursor-pointer active:scale-95 transition-transform duration-100", onClick: () => onPlay(item) },
+                                React.createElement('img', { src: item.stream_icon, className: "w-full h-full object-cover", loading: "lazy", onError: (e) => e.target.src = "https://via.placeholder.com/300x450/111/333?text=IMG" }),
+                                React.createElement('div', { className: "absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black to-transparent" }, React.createElement('p', { className: "text-white text-[10px] font-bold truncate" }, item.name))
                             )
                         )
-                    ),
-                    React.createElement('button', { onClick: () => scroll(300), className: "absolute right-0 top-0 bottom-0 z-40 bg-black/60 w-10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity h-full rounded-l" }, React.createElement(ChevronRight, { className: "text-white" }))
+                    )
                 )
             );
         };
@@ -157,18 +178,15 @@
         const Hero = ({ item, onPlay }) => {
             if (!item) return null;
             const bg = item.backdrop_path?.[0] || item.stream_icon;
-            return React.createElement('div', { className: "relative w-full h-[55vh] md:h-[75vh] mb-8" },
+            return React.createElement('div', { className: "relative w-full h-[50vh] md:h-[70vh] mb-8" },
                 React.createElement('div', { className: "absolute inset-0" },
                     React.createElement('img', { src: bg, className: "w-full h-full object-cover opacity-60", onError: (e) => e.target.src = "https://via.placeholder.com/1920x1080/111/333?text=Hero" }),
-                    React.createElement('div', { className: "absolute inset-0 bg-gradient-to-t from-[#141414] via-transparent to-black/40" }),
-                    React.createElement('div', { className: "absolute inset-0 bg-gradient-to-r from-[#141414] via-[#141414]/50 to-transparent" })
+                    React.createElement('div', { className: "absolute inset-0 bg-gradient-to-t from-[#000] via-transparent to-black/40" }),
+                    React.createElement('div', { className: "absolute inset-0 bg-gradient-to-r from-[#000] via-[#000]/40 to-transparent" })
                 ),
-                React.createElement('div', { className: "absolute bottom-16 left-4 md:left-12 max-w-2xl z-10" },
-                    React.createElement('h1', { className: "text-4xl md:text-6xl font-black text-white drop-shadow-2xl mb-4" }, item.name),
-                    React.createElement('div', { className: "flex gap-4" },
-                        React.createElement('button', { onClick: () => onPlay(item), className: "bg-white text-black px-8 py-3 rounded font-bold hover:bg-gray-200 transition flex items-center gap-2" }, React.createElement(Play, { fill: "black" }), "Assistir"),
-                        React.createElement('button', { className: "bg-gray-500/40 text-white px-8 py-3 rounded font-bold hover:bg-gray-500/60 backdrop-blur-md transition flex items-center gap-2" }, React.createElement(Info, null), "Info")
-                    )
+                React.createElement('div', { className: "absolute bottom-10 left-4 md:left-12 max-w-2xl z-10" },
+                    React.createElement('h1', { className: "text-3xl md:text-6xl font-black text-white drop-shadow-2xl mb-4 leading-none" }, item.name),
+                    React.createElement('button', { onClick: () => onPlay(item), className: "bg-white text-black px-6 py-3 rounded font-bold hover:bg-gray-200 transition flex items-center gap-2 shadow-lg" }, React.createElement(Play, { fill: "black", size: 20 }), "Assistir")
                 )
             );
         };
@@ -178,27 +196,18 @@
             const [user, setUser] = useState(DEFAULT_CREDENTIALS.username);
             const [pass, setPass] = useState(DEFAULT_CREDENTIALS.password);
 
-            return React.createElement('div', { className: "min-h-screen bg-black flex items-center justify-center bg-[url('https://assets.nflxext.com/ffe/siteui/vlv3/f841d4c7-10e1-40af-bcae-07a3f8dc141a/f6d7434e-d6de-4185-a6d4-c77a2d08737b/US-en-20220502-popsignuptwoweeks-perspective_alpha_website_medium.jpg')] bg-cover" },
-                React.createElement('div', { className: "bg-black/85 p-10 rounded-lg max-w-md w-full backdrop-blur-md border border-gray-800" },
-                    React.createElement('h1', { className: "text-red-600 text-5xl font-black mb-8 text-center tracking-tighter" }, "NET", React.createElement('span', { className: "text-white font-light" }, "XSTREAM")),
-                    
+            return React.createElement('div', { className: "min-h-screen bg-black flex items-center justify-center p-4 bg-[url('https://assets.nflxext.com/ffe/siteui/vlv3/f841d4c7-10e1-40af-bcae-07a3f8dc141a/f6d7434e-d6de-4185-a6d4-c77a2d08737b/US-en-20220502-popsignuptwoweeks-perspective_alpha_website_medium.jpg')] bg-cover" },
+                React.createElement('div', { className: "bg-black/90 p-8 rounded-lg max-w-md w-full backdrop-blur-md border border-gray-800 shadow-2xl" },
+                    React.createElement('h1', { className: "text-red-600 text-4xl font-black mb-6 text-center tracking-tighter" }, "NET", React.createElement('span', { className: "text-white font-light" }, "XSTREAM")),
                     error && React.createElement('div', { className: "bg-red-900/40 border border-red-500 p-3 rounded mb-4 text-red-200 text-sm flex items-center gap-2" }, React.createElement(AlertTriangle, { size: 16 }), error),
-                    
                     loading && React.createElement('div', { className: "bg-blue-900/40 border border-blue-500 p-3 rounded mb-4 text-blue-200 text-xs font-mono animate-pulse" }, log || "Iniciando protocolos..."),
-
                     React.createElement('form', { onSubmit: (e) => { e.preventDefault(); onLogin(host, user, pass); }, className: "flex flex-col gap-4" },
-                        React.createElement('div', { className: "relative" },
-                             React.createElement('input', { className: "w-full bg-[#333] text-white p-4 rounded border-b-2 border-transparent focus:border-red-600 outline-none placeholder-gray-500", placeholder: "URL do Servidor", value: host, onChange: e => setHost(e.target.value) }),
-                             React.createElement(Wifi, { size: 16, className: "absolute right-4 top-5 text-gray-500" })
-                        ),
+                        React.createElement('input', { className: "w-full bg-[#333] text-white p-4 rounded border-b-2 border-transparent focus:border-red-600 outline-none", placeholder: "URL do Servidor", value: host, onChange: e => setHost(e.target.value) }),
                         React.createElement('input', { className: "bg-[#333] text-white p-4 rounded border-b-2 border-transparent focus:border-red-600 outline-none", placeholder: "Usuário", value: user, onChange: e => setUser(e.target.value) }),
                         React.createElement('input', { className: "bg-[#333] text-white p-4 rounded border-b-2 border-transparent focus:border-red-600 outline-none", type: "password", placeholder: "Senha", value: pass, onChange: e => setPass(e.target.value) }),
-                        
-                        React.createElement('button', { disabled: loading, className: "bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded mt-2 transition flex items-center justify-center gap-2 shadow-lg disabled:opacity-50" },
-                            loading ? React.createElement(Loader2, { className: "animate-spin" }) : "Buscar Rotas Seguras"
-                        )
+                        React.createElement('button', { disabled: loading, className: "bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded mt-2 transition flex items-center justify-center gap-2 shadow-lg disabled:opacity-50" }, loading ? React.createElement(Loader2, { className: "animate-spin" }) : "Entrar (Multi-Route)")
                     ),
-                    React.createElement('div', { className: "mt-6 text-center text-gray-500 text-xs" }, "V8 Multi-Gateway System")
+                    React.createElement('div', { className: "mt-6 text-center text-gray-500 text-[10px]" }, "V10 Native Bridge System")
                 )
             );
         };
@@ -211,58 +220,50 @@
             const [data, setData] = useState({ vod: {}, live: {}, featured: null });
             const [player, setPlayer] = useState(null);
             const [activeTab, setActiveTab] = useState('home');
-            const [activeGateway, setActiveGateway] = useState(null);
 
-            // Fetch inteligente que tenta o gateway específico
-            const tryFetch = async (url, gatewayUrl) => {
-                const target = `${gatewayUrl}${encodeURIComponent(url)}`;
-                const res = await fetch(target);
-                if(!res.ok) throw new Error("Erro");
-                return await res.json();
+            // FUNÇÃO DE ROTAÇÃO DE API ROBUSTA
+            const robustFetch = async (url) => {
+                // Tenta todos os gateways em sequência até um funcionar
+                for (const gateway of API_GATEWAYS) {
+                    try {
+                        const target = `${gateway}${encodeURIComponent(url)}`;
+                        const controller = new AbortController();
+                        const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
+                        const res = await fetch(target, { signal: controller.signal });
+                        clearTimeout(timeoutId);
+                        if(res.ok) return await res.json();
+                    } catch(e) { continue; }
+                }
+                throw new Error("Todas as rotas falharam.");
             }
 
             const handleLogin = async (host, username, password) => {
-                setLoading(true); setError(null); setLoginLog("Iniciando varredura...");
+                setLoading(true); setError(null); setLoginLog("Buscando rota segura...");
                 const baseUrl = formatUrl(host);
                 const query = `/player_api.php?username=${username}&password=${password}`;
                 
-                let successGateway = null;
-                let authData = null;
-
-                // Tenta cada gateway sequencialmente
-                for (const gateway of GATEWAYS) {
-                    try {
-                        setLoginLog(`Testando ${gateway.name}...`);
-                        const json = await tryFetch(baseUrl + query, gateway.url);
-                        
-                        if (json.user_info && json.user_info.auth === 1) {
-                            successGateway = gateway.url;
-                            authData = json;
-                            break; // Sucesso! Para o loop.
-                        }
-                    } catch (e) {
-                        console.log(`Falha em ${gateway.name}`);
+                try {
+                    const json = await robustFetch(baseUrl + query);
+                    if (json.user_info && json.user_info.auth === 1) {
+                        setLoginLog("Autenticado! Baixando catálogo...");
+                        const userData = { host: baseUrl, username, password, authData: json };
+                        setUser(userData);
+                        localStorage.setItem('cineStreamUserV10', JSON.stringify(userData));
+                        loadContent(userData);
+                    } else {
+                        setError("Login falhou: Dados incorretos.");
+                        setLoading(false);
                     }
-                }
-
-                if (successGateway && authData) {
-                    setLoginLog("Conexão estabelecida! Carregando...");
-                    const userData = { host: baseUrl, username, password, authData };
-                    setActiveGateway(successGateway);
-                    setUser(userData);
-                    loadContent(userData, successGateway);
-                } else {
-                    setError("Falha Total: Nenhum Gateway conseguiu conectar ao servidor. Verifique o usuário/senha ou o servidor está offline.");
+                } catch (e) {
+                    setError("Erro de Rede: Não foi possível baixar os dados (JSON) via proxy.");
                     setLoading(false);
                 }
             };
 
-            const loadContent = async (userData, gatewayUrl) => {
+            const loadContent = async (userData) => {
                 try {
                     const base = `${userData.host}/player_api.php?username=${userData.username}&password=${userData.password}`;
-                    
-                    // Usa o mesmo gateway que funcionou no login
-                    const pFetch = (act) => tryFetch(base + "&action=" + act, gatewayUrl);
+                    const pFetch = (act) => robustFetch(base + "&action=" + act);
 
                     const [vc, lc, vs, ls] = await Promise.all([
                         pFetch("get_vod_categories"),
@@ -278,6 +279,15 @@
                     setLoading(false);
                 }
             };
+
+            useEffect(() => {
+                const saved = localStorage.getItem('cineStreamUserV10');
+                if(saved) {
+                    const parsed = JSON.parse(saved);
+                    setUser(parsed);
+                    loadContent(parsed);
+                }
+            }, []);
 
             const processContent = (vodCats, liveCats, vodStreams, liveStreams) => {
                 const process = (cats, streams) => {
@@ -310,38 +320,32 @@
 
             if (!user) return React.createElement(Login, { onLogin: handleLogin, loading: loading, error: error, log: loginLog });
 
-            return React.createElement('div', { className: "bg-[#141414] min-h-screen font-sans text-white pb-10" },
-                React.createElement('div', { className: "fixed top-0 w-full z-50 bg-black/80 backdrop-blur-md px-6 py-4 flex justify-between items-center border-b border-gray-800" },
-                    React.createElement('div', { className: "flex items-center gap-8" },
+            return React.createElement('div', { className: "bg-black min-h-screen font-sans text-white pb-20" },
+                React.createElement('div', { className: "fixed top-0 w-full z-50 bg-black/90 backdrop-blur-md px-6 py-4 flex justify-between items-center border-b border-gray-900" },
+                    React.createElement('div', { className: "flex items-center gap-6" },
                         React.createElement('h1', { className: "text-red-600 text-2xl font-black tracking-tighter cursor-pointer", onClick: () => setActiveTab('home') }, "CINESTREAM"),
-                        React.createElement('div', { className: "hidden md:flex gap-4 text-sm font-bold text-gray-400" },
-                            React.createElement('button', { onClick: () => setActiveTab('home'), className: activeTab === 'home' ? "text-white" : "" }, "Início"),
-                            React.createElement('button', { onClick: () => setActiveTab('movies'), className: activeTab === 'movies' ? "text-white" : "" }, "Filmes"),
-                            React.createElement('button', { onClick: () => setActiveTab('live'), className: activeTab === 'live' ? "text-white" : "" }, "TV")
-                        )
                     ),
-                    React.createElement('button', { onClick: () => { setUser(null); }, className: "text-gray-400 hover:text-white" }, React.createElement(LogOut, { size: 20 }))
+                    React.createElement('button', { onClick: () => { setUser(null); localStorage.removeItem('cineStreamUserV10'); }, className: "text-gray-400 hover:text-white" }, React.createElement(LogOut, { size: 20 }))
                 ),
 
                 React.createElement('div', { className: "pt-20" },
                     activeTab === 'home' && React.createElement(React.Fragment, null,
                         data.featured && React.createElement(Hero, { item: data.featured, onPlay: (i) => play(i, 'vod') }),
                         React.createElement('div', { className: "relative z-20 space-y-2 -mt-10 md:-mt-32" },
-                            Object.keys(data.vod).slice(0,6).map(cat => React.createElement(Row, { key: cat, title: cat, items: data.vod[cat], onPlay: (i) => play(i, 'vod') })),
+                            Object.keys(data.vod).slice(0,8).map(cat => React.createElement(Row, { key: cat, title: cat, items: data.vod[cat], onPlay: (i) => play(i, 'vod') })),
                             Object.keys(data.live).slice(0,3).map(cat => React.createElement(Row, { key: cat, title: `TV: ${cat}`, items: data.live[cat], onPlay: (i) => play(i, 'live') }))
                         )
-                    ),
-                    activeTab === 'movies' && React.createElement('div', { className: "mt-8" },
-                        React.createElement('h2', { className: "px-12 text-3xl font-bold mb-6" }, "Todos os Filmes"),
-                        Object.keys(data.vod).map(cat => React.createElement(Row, { key: cat, title: cat, items: data.vod[cat], onPlay: (i) => play(i, 'vod') }))
-                    ),
-                    activeTab === 'live' && React.createElement('div', { className: "mt-8" },
-                        React.createElement('h2', { className: "px-12 text-3xl font-bold mb-6" }, "Canais Ao Vivo"),
-                        Object.keys(data.live).map(cat => React.createElement(Row, { key: cat, title: cat, items: data.live[cat], onPlay: (i) => play(i, 'live') }))
                     )
                 ),
+                
+                // NAVEGAÇÃO MOBILE
+                React.createElement('div', { className: "fixed bottom-0 left-0 w-full bg-[#111] border-t border-gray-800 p-2 flex justify-around z-50 md:hidden" },
+                   React.createElement('div', { onClick: () => setActiveTab('home'), className: `flex flex-col items-center ${activeTab === 'home' ? 'text-white' : 'text-gray-500'}` }, React.createElement(Tv, {size: 20}), React.createElement('span', {className: "text-[10px] mt-1"}, "Início")),
+                   React.createElement('div', { onClick: () => setActiveTab('home'), className: "flex flex-col items-center text-gray-500" }, React.createElement(Film, {size: 20}), React.createElement('span', {className: "text-[10px] mt-1"}, "Filmes")),
+                   React.createElement('div', { onClick: () => setActiveTab('home'), className: "flex flex-col items-center text-gray-500" }, React.createElement(Zap, {size: 20}), React.createElement('span', {className: "text-[10px] mt-1"}, "Ao Vivo"))
+                ),
 
-                player && React.createElement(VideoPlayer, { streamUrl: player.url, title: player.title, activeGateway: activeGateway, onClose: () => setPlayer(null) })
+                player && React.createElement(VideoPlayer, { streamUrl: player.url, title: player.title, userHost: user.host, onClose: () => setPlayer(null) })
             );
         };
 
